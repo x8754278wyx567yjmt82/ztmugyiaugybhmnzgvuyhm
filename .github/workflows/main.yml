@@ -16,7 +16,6 @@ jobs:
 
     steps:
       # Шаг 1: Скачиваем код репозитория
-      # Используем GITHUB_TOKEN, чтобы воркер имел права на запись в репозиторий
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
@@ -29,15 +28,37 @@ jobs:
             echo "Backup file found. Restoring..."
             # Распаковываем архив с заменой существующих файлов
             unzip -o vds_backup.zip -d ./
+            # Убедитесь, что конфигурационный файл x-ui.db восстановлен!
           else
             echo "No backup found. Starting fresh."
           fi
 
-      # Шаг 3: Устанавливаем tmate и запускаем сессию в фоне
+      # НОВЫЙ ШАГ (A): Устанавливаем необходимые пакеты
+      - name: Install Prerequisites
+        run: sudo apt-get update && sudo apt-get install -y curl unzip
+
+      # НОВЫЙ ШАГ (B): Устанавливаем 3X-UI
+      - name: Install and Start 3X-UI
+        run: |
+          echo "Installing 3X-UI..."
+          # Выполняем скрипт установки 3X-UI
+          bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) <<EOF
+n # Отвечаем 'n', чтобы не настраивать порт вручную (или 'y' и указываем порт, но это усложнит)
+admin # Имя пользователя по умолчанию (измените)
+password # Пароль по умолчанию (измените)
+EOF
+          # После установки панель должна автоматически запуститься. 
+          # Если нет, вы можете попробовать запустить ее вручную.
+          # Если вы указали порт 8080 при ручной установке, используйте:
+          # systemctl start x-ui 
+          
+          # Так как tmate будет запущен в следующем шаге, он сохранит сессию.
+
+      # Шаг 3 (был 3): Устанавливаем tmate и запускаем сессию в фоне
       - name: Setup and Run tmate
         id: tmate_session # Даем ID шагу, чтобы получить его вывод в следующих шагах
         run: |
-          sudo apt-get update && sudo apt-get install -y tmate
+          sudo apt-get install -y tmate # Установка уже в Шаге (A)
    
           # Запускаем tmate в фоновом режиме (в "детаче")
           tmate -S /tmp/tmate.sock new-session -d
@@ -65,7 +86,8 @@ jobs:
       - name: Create Backup
         run: |
           echo "Creating data backup..."
-          # Архивируем все содержимое текущей директории, кроме папки .git и самого файла бэкапа
+          # Важно: Скрипт 3X-UI может сохранять данные в разных местах, но обычно это /etc/x-ui/x-ui.db
+          # На всякий случай, архивируем все, что есть, чтобы не потерять базу данных панели.
           zip -r vds_backup.zip . -x ".git/*" "vds_backup.zip" "ssh_link.txt"
 
       # Шаг 7: Сохраняем бэкап и SSH-ссылку в репозиторий
@@ -73,14 +95,12 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "VDS Backup & SSH Link Auto-Update"
-          # Указываем, какие файлы коммитить
           file_pattern: "vds_backup.zip ssh_link.txt"
 
       # Шаг 8: Запускаем следующую сессию (АВТОРЕСТАРТ)
       - name: Trigger Next VDS Run
         run: |
           echo "Triggering VDS restart..."
-          # Отправляем запрос к API GitHub, чтобы запустить этот же воркфлоу снова
           curl -L \
             -X POST \
             -H "Accept: application/vnd.github.v3+json" \
